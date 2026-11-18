@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -159,9 +158,6 @@ func (c *Client) answerPermission(msg rpcMessage) {
 	}
 	allow := d.Matched && d.Allow
 	option := pickOption(p.Options, allow)
-	if allow && strings.Contains(strings.ToLower(option), "always") {
-		option = "allow-once"
-	}
 	permissionResult := PermissionOutcomeValue{Outcome: "selected", OptionID: option}
 	if cancelled || c.permissionWaitContext().Err() != nil {
 		permissionResult = PermissionOutcomeValue{Outcome: "cancelled"}

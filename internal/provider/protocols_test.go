@@ -145,3 +145,40 @@ func TestCodexToolElicitationGoesThroughTheFence(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeAllowRunsWithTheExactDecidedInput(t *testing.T) {
+	input := `{"b":1,"a":12345678901234567890,"n":1.0}`
+	line := `{"request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"mcp__docs__search","input":` + input + `}}`
+	var seen json.RawMessage
+	decide := func(options []Option, raw json.RawMessage) (string, bool) {
+		seen = raw
+		return "allow", true
+	}
+	var out strings.Builder
+	if _, err := answerClaudeControl(&out, []byte(line), decide); err != nil {
+		t.Fatal(err)
+	}
+	var decided struct {
+		RawInput json.RawMessage `json:"rawInput"`
+	}
+	if err := json.Unmarshal(seen, &decided); err != nil {
+		t.Fatal(err)
+	}
+	if string(decided.RawInput) != input {
+		t.Fatalf("gate saw input %s, want %s", decided.RawInput, input)
+	}
+	var reply struct {
+		Response struct {
+			Response struct {
+				Behavior     string          `json:"behavior"`
+				UpdatedInput json.RawMessage `json:"updatedInput"`
+			} `json:"response"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if got := reply.Response.Response; got.Behavior != "allow" || string(got.UpdatedInput) != input {
+		t.Fatalf("allow reply = %s %s, want allow with %s", got.Behavior, got.UpdatedInput, input)
+	}
+}
