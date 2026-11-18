@@ -226,6 +226,9 @@ func answerCodexRequest(w io.Writer, msg map[string]any, decide Decide) (Event, 
 		err := writeJSON(w, map[string]any{"id": msg["id"], "result": map[string]any{"permissions": map[string]any{}, "scope": "turn"}})
 		return Event{Kind: "permission", OptionID: "deny", Body: "deny"}, err
 	}
+	if method == codexElicitationMethod {
+		return answerCodexElicitation(w, msg["id"], params, decide)
+	}
 	if method != "item/commandExecution/requestApproval" && method != "item/fileChange/requestApproval" {
 		return Event{}, fmt.Errorf("provider: unsupported codex request %q", method)
 	}
@@ -244,6 +247,55 @@ func answerCodexRequest(w io.Writer, msg map[string]any, decide Decide) (Event, 
 	}
 	err := writeJSON(w, map[string]any{"id": msg["id"], "result": map[string]string{"decision": decision}})
 	return Event{Kind: "permission", OptionID: decision, Body: decision}, err
+}
+
+const codexElicitationMethod = "mcpServer/elicitation/request"
+
+// answerCodexElicitation answers one app-server elicitation. The only one
+// answered is the per-call approval of a tool-server call: it goes through
+// decide, and an allow accepts that call alone. Anything else, or an approval
+// whose tool name or arguments cannot be read, is declined without asking and
+// reported in Event.Call so the host records it.
+func answerCodexElicitation(w io.Writer, id any, params map[string]any, decide Decide) (Event, error) {
+	action := "decline"
+	var declined json.RawMessage
+	if call, ok := codexToolApproval(params); !ok {
+		server, _ := params["serverName"].(string)
+		declined, _ = json.Marshal(map[string]any{
+			"toolName": codexElicitationMethod, "title": codexElicitationMethod, "kind": "other",
+			"server": server, "reason": "not a readable tool-call approval",
+		})
+	} else if decide != nil {
+		if option, allow := decide([]Option{{ID: "accept"}, {ID: "decline"}}, call); allow && option == "accept" {
+			action = "accept"
+		}
+	}
+	err := writeJSON(w, map[string]any{"id": id, "result": map[string]any{"action": action, "content": nil}})
+	return Event{Kind: "permission", OptionID: action, Body: action, Call: declined}, err
+}
+
+// codexToolApproval reads a tool-server call approval: a form with no fields
+// to fill, marked codex_approval_kind "mcp_tool_call", carrying the call's
+// tool name and an arguments object. The call is named like Claude's
+// (mcp__<server>__<tool>) so one tool rule covers either guest. Codex omits
+// tool_params for a call without arguments; that is not read as "none".
+func codexToolApproval(params map[string]any) (json.RawMessage, bool) {
+	meta, _ := params["_meta"].(map[string]any)
+	schema, _ := params["requestedSchema"].(map[string]any)
+	fields, _ := schema["properties"].(map[string]any)
+	server, _ := params["serverName"].(string)
+	tool, _ := meta["tool_name"].(string)
+	args, hasArgs := meta["tool_params"].(map[string]any)
+	if params["mode"] != "form" || meta["codex_approval_kind"] != "mcp_tool_call" || len(fields) > 0 || server == "" || tool == "" || !hasArgs {
+		return nil, false
+	}
+	name := "mcp__" + server + "__" + tool
+	call := map[string]any{"title": name, "toolName": name, "kind": "other", "rawInput": args}
+	if cmd, ok := args["command"].(string); ok {
+		call["command"] = cmd
+	}
+	raw, err := json.Marshal(call)
+	return raw, err == nil
 }
 
 func readProviderLoop(r *bufio.Reader, w io.Writer, cursor string, decide Decide, kind string, observe func(Event)) (Result, error) {

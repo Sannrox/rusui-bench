@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/sannrox/rusui/internal/acp"
 	"github.com/sannrox/rusui/internal/guest"
@@ -56,14 +57,51 @@ func acpMCPServers(a *Assignment, servers []MCPServer) []any {
 }
 
 // mcpArgv adds the servers to a native guest's command line. The credential
-// is referenced by environment variable name only. Only Claude gets them:
-// its can_use_tool request puts every tool-server call through the
-// permission fence. The pinned Codex app-server protocol has no per-call
-// approval for tool-server calls, so Codex is never sent servers (#684).
+// is referenced by environment variable name only. Claude's can_use_tool
+// request and Codex's per-call tool approval put every tool-server call
+// through the permission fence.
 func mcpArgv(a *Assignment, argv []string, servers []MCPServer) []string {
-	if len(servers) == 0 || a.Guest != guest.KindClaude {
+	if len(servers) == 0 {
 		return argv
 	}
+	switch a.Guest {
+	case guest.KindClaude:
+		return claudeMCPArgv(a, argv, servers)
+	case guest.KindCodex:
+		return codexMCPArgv(a, argv, servers)
+	}
+	return argv
+}
+
+// codexMCPArgv sets every server's tool approval mode to prompt, so the
+// app-server asks before each call, and sets no per-tool override. The
+// guest's home is fresh and repository Codex config is refused, so these
+// overrides are the only source of the mode.
+func codexMCPArgv(a *Assignment, argv []string, servers []MCPServer) []string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, s := range servers {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `%s={url=%s,default_tools_approval_mode="prompt"`, tomlString(s.Name), tomlString(s.URL))
+		if a.authenticated(s) {
+			fmt.Fprintf(&b, `,bearer_token_env_var=%s`, tomlString(turnTokenEnv))
+		}
+		b.WriteByte('}')
+	}
+	b.WriteByte('}')
+	return append(argv, "-c", "mcp_servers="+b.String())
+}
+
+// tomlString quotes s as a TOML basic string. JSON string escapes are a
+// subset of TOML's.
+func tomlString(s string) string {
+	raw, _ := json.Marshal(s)
+	return string(raw)
+}
+
+func claudeMCPArgv(a *Assignment, argv []string, servers []MCPServer) []string {
 	type entry struct {
 		Type    string            `json:"type"`
 		URL     string            `json:"url"`

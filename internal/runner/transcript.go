@@ -80,10 +80,17 @@ func (c *transcriptRecorder) clean(s string, limit int) string {
 	return truncateUTF8(c.redact(s), limit)
 }
 
-// Observe records one provider event. Permission and other kinds are
-// recorded by their own paths and are ignored here.
+// Observe records one provider event. Permission decisions are recorded by
+// their own path and are ignored here, except a request the adapter declined
+// without asking: no decision ran, so it is recorded as a denied approval.
 func (c *transcriptRecorder) Observe(ev provider.Event) {
 	if c == nil || c.rec == nil {
+		return
+	}
+	if ev.Kind == "permission" && len(ev.Call) > 0 {
+		_, _ = c.Record(acp.Receipt{Type: acp.ActionApproval, Reason: acp.ReasonDenied, Body: acp.PermissionParams{
+			ToolCall: ev.Call, Options: []acp.PermOption{{OptionID: "accept"}, {OptionID: "decline"}},
+		}})
 		return
 	}
 	var update map[string]any

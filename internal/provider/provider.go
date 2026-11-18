@@ -77,6 +77,9 @@ type Event struct {
 	Reset        string
 	ResetMissing bool
 	Tool         *ToolCall // set on a parsed tool_call
+	// Call is set on a permission the adapter declined without asking
+	// decide: the request in the shape decide reads, for the host to record.
+	Call json.RawMessage
 }
 
 // ToolCall is one tool call or its outcome in ACP terms. A call carries
