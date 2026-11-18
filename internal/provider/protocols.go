@@ -485,18 +485,23 @@ var claudeToolKinds = map[string]string{
 // answerClaudeControl answers one Claude Code control request. Only
 // can_use_tool is supported; any other subtype is refused. The tool call
 // is translated to the ACP shape the gate reads, and a denial or a missing
-// decision replies deny.
+// decision replies deny. The input stays raw bytes end to end: the gate and
+// the operator see, and an allow returns, exactly what the guest asked to
+// run, with no number or key rewritten by a decode and re-encode.
 func answerClaudeControl(w io.Writer, line []byte, decide Decide) (Event, error) {
 	var req struct {
 		RequestID string `json:"request_id"`
 		Request   struct {
-			Subtype  string         `json:"subtype"`
-			ToolName string         `json:"tool_name"`
-			Input    map[string]any `json:"input"`
+			Subtype  string          `json:"subtype"`
+			ToolName string          `json:"tool_name"`
+			Input    json.RawMessage `json:"input"`
 		} `json:"request"`
 	}
 	if err := json.Unmarshal(line, &req); err != nil {
 		return Event{}, err
+	}
+	if len(req.Request.Input) == 0 {
+		req.Request.Input = json.RawMessage("null")
 	}
 	allow := false
 	decision := map[string]any{"behavior": "deny", "message": "denied by rusui policy"}
@@ -510,7 +515,9 @@ func answerClaudeControl(w io.Writer, line []byte, decide Decide) (Event, error)
 			kind = "other"
 		}
 		call := map[string]any{"title": req.Request.ToolName, "toolName": req.Request.ToolName, "kind": kind, "rawInput": req.Request.Input}
-		if cmd, ok := req.Request.Input["command"].(string); ok {
+		var fields map[string]any
+		_ = json.Unmarshal(req.Request.Input, &fields)
+		if cmd, ok := fields["command"].(string); ok {
 			call["command"] = cmd
 		}
 		raw, _ := json.Marshal(call)
