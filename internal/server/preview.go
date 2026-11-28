@@ -362,6 +362,9 @@ func (s *Server) denyPlaneDest(dial string) error {
 	if planeUnspecified(wantHost) && (planeLoopback(gotHost) || planeUnspecified(gotHost)) {
 		return fmt.Errorf("plane listener not a preview target")
 	}
+	if planeUnspecified(wantHost) && planeHostIsLocal(gotHost) {
+		return fmt.Errorf("plane listener not a preview target")
+	}
 	if planeLoopback(wantHost) && planeLoopback(gotHost) {
 		return fmt.Errorf("plane listener not a preview target")
 	}
@@ -377,6 +380,37 @@ func planeLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// planeHostIsLocal reports whether host is, or resolves to, an address on a local
+// interface; resolution and interface errors count as local (fail closed).
+func planeHostIsLocal(host string) bool {
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	ips := []net.IP{net.ParseIP(host)}
+	if ips[0] == nil {
+		var err error
+		if ips, err = net.LookupIP(host); err != nil || len(ips) == 0 {
+			return true
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return true
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		for _, ip := range ips {
+			if n.IP.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func planeUnspecified(host string) bool {
