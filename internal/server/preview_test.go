@@ -387,6 +387,49 @@ func TestPreviewGrantDeniesUnspecifiedPlaneAddr(t *testing.T) {
 	}
 }
 
+func TestPlaneHostIsLocal(t *testing.T) {
+	for host, want := range map[string]bool{
+		"127.0.0.1":    true,
+		"localhost":    true,
+		"198.51.100.1": false,
+		"2001:db8::1":  false,
+		"host.invalid": true,
+	} {
+		if got := planeHostIsLocal(host); got != want {
+			t.Errorf("planeHostIsLocal(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestDenyPlaneDestWildcardCoversLocalInterfaces(t *testing.T) {
+	var nic string
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() != nil {
+			nic = n.IP.String()
+			break
+		}
+	}
+	if nic == "" {
+		t.Skip("no non-loopback IPv4 interface address")
+	}
+	for _, bind := range []string{"0.0.0.0:8080", "[::]:8080", ":8080"} {
+		s := &Server{Addr: bind}
+		if err := s.denyPlaneDest(net.JoinHostPort(nic, "8080")); err == nil {
+			t.Errorf("bind %s: dial %s:8080 allowed", bind, nic)
+		}
+		if err := s.denyPlaneDest(net.JoinHostPort(nic, "9090")); err != nil {
+			t.Errorf("bind %s: other port denied: %v", bind, err)
+		}
+		if err := s.denyPlaneDest("198.51.100.1:8080"); err != nil {
+			t.Errorf("bind %s: foreign address denied: %v", bind, err)
+		}
+	}
+	if err := (&Server{Addr: nic + ":8080"}).denyPlaneDest("127.0.0.1:8080"); err != nil {
+		t.Errorf("NIC bind does not accept on loopback: %v", err)
+	}
+}
+
 func TestPreviewGrantDeniesPlaneListenPort(t *testing.T) {
 	t.Parallel()
 	s, hs, e := consoleEnv(t)
